@@ -5,17 +5,41 @@ Notes for people working on this repository.
 ## Repository layout
 
     provebuddy-rocq-mcp/
-    |-- third_party/rocq-mcp/   # git submodule: upstream rocq-mcp (read-only reference / reuse source)
-    |-- scripts/                # infrastructure scripts
-    |-- README.md               # user-facing documentation
-    |-- DEVELOPMENT.md          # this file
-    |-- LICENSE                 # Apache-2.0
-    |-- NOTICE
-    `-- .gitignore
+    |-- core/                    # borrowed engine, organized as ours
+    |   |-- __init__.py          # package init (__version__)
+    |   |-- config.py            # env-var configuration, availability checks
+    |   |-- workspace.py         # workspace/path/dune/.vo-epoch helpers
+    |   |-- pet.py               # pet lifecycle, locks, watchdog, _run_with_pet
+    |   |-- envelope.py          # failure envelopes, reason sets
+    |   |-- state.py             # make_runtime_state() / shutdown_runtime()
+    |   |-- compile.py           # run_compile / run_compile_file / run_verify
+    |   |-- coqc.py              # coqc subprocess execution + output parsing
+    |   |-- interactive.py       # run_query / run_start / run_check / ...
+    |   |-- sessions.py          # state table, import cache, staleness
+    |   |-- verify.py            # verification source builders
+    |   |-- proof_walk.py        # multi-error file walker
+    |   |-- compile_enrichment.py# pet state capture on compile errors
+    |   |-- diag.py              # diagnostics snapshot builder
+    |   `-- health.py            # toolchain health / switch detection
+    |-- utils/                   # pure helpers (reserved; empty)
+    |-- tests/                   # upstream tests, imports re-pointed to core.*
+    |-- specifications/          # migration spec, baseline & triage records
+    |-- scripts/                 # infrastructure scripts
+    |-- third_party/rocq-mcp/    # git submodule: upstream rocq-mcp (read-only)
+    |-- pyproject.toml
+    |-- README.md
+    |-- DEVELOPMENT.md           # this file
+    |-- LICENSE                  # Apache-2.0
+    `-- NOTICE
 
 ## Getting started
 
     ./scripts/init.sh   # initializes the submodule and verifies the pin
+    uv pip install -e ".[dev]"
+    pytest tests/
+
+**Note:** pytest must be run outside any sandbox that interferes with
+asyncio (the suite hangs inside the Codex sandbox; run it unsandboxed).
 
 ## Tracked upstream version
 
@@ -26,28 +50,71 @@ Notes for people working on this repository.
 | Version | `0.3.1` (pyproject.toml) |
 | Pinned on | 2026-08-16 |
 
+## Relationship to upstream
+
+`core/` is a self-contained reorganization of upstream `rocq-mcp`'s engine.
+No upstream package is imported; no `rocq_mcp` package exists in this
+repository.  The FastMCP layer (app, 13 tool wrappers, entry point) was
+removed.  The permanent reference for this relationship is
+`specifications/engine-migration-report.md`.
+
+### Upstream symbol → core module map
+
+Use this table when porting upstream changes:
+
+| Upstream location | Now lives in |
+|---|---|
+| `server.py` configuration section | `core/config.py` |
+| `server.py` shared helpers + .vo epoch + dune | `core/workspace.py` |
+| `server.py` pet section + semaphore + watchdog + `_run_with_pet` | `core/pet.py` |
+| `server.py` envelope helpers | `core/envelope.py` |
+| `server.py` lifespan body | `core/state.py` (`make_runtime_state` / `shutdown_runtime`) |
+| `compile.py` §1-717 + sentence splitting | `core/coqc.py` |
+| `compile.py` §718-1744 (run_*, dune, verify) | `core/compile.py` |
+| `interactive.py` import cache/state table/staleness | `core/sessions.py` |
+| `interactive.py` run_* + goal formatting | `core/interactive.py` |
+| `verify.py`, `proof_walk.py`, `compile_enrichment.py`, `diag.py`, `health.py` | same name in `core/` |
+| deleted: FastMCP app, 13 `@mcp.tool` wrappers, `main()` | — (rebuilt later as our own MCP layer) |
+
+Import conventions that must be preserved:
+
+- Engine modules read configuration and shared helpers through module
+  references (`_config.X`, `_pet.X`, `_workspace.X`, `_envelope.X`) so test
+  monkeypatching of `core.config.X` etc. stays visible at call time.
+- `core/sessions.py` registers `_invalidate_import_cache` and
+  `_state_invalidate_all` on `pet._pet_invalidation_hooks` at import time.
+- `core/workspace.py::_count_sessions_in_workspace` lazily imports
+  `core.sessions._state_table` inside the function body (avoids a cycle,
+  mirroring upstream).
+- `core/compile_enrichment.py` keeps its module-level asserts against
+  `envelope._PET_SIDE_FAILURE_REASONS`.
+
 ## Syncing with upstream
 
 1. Run `./scripts/sync-upstream.sh` to check for updates (read-only).
 2. Review the upstream commits since the pin.
-3. Check out the new commit in `third_party/rocq-mcp`, `git add` it, and update
-   the pin record in this file.
-4. Port engine-layer changes selectively and record the port log below.
+3. Check out the new commit in `third_party/rocq-mcp`, `git add` it, and
+   update the pin record in this file.
+4. Port engine-layer changes into `core/` using the symbol map above; never
+   touch upstream (the submodule is a read-only reference).
+5. Re-run `pytest tests/` and compare against the baseline record in
+   `specifications/engine-migration-report.md` (§5 Phase 0).
 
 ### Port log
 
 | Upstream version | Pinned commit | Ported | Skipped | Notes |
 |------------------|---------------|--------|---------|-------|
-| 0.3.1 | `6983113d...` | — | — | Initial pin |
+| 0.3.1 | `6983113d...` | Engine layer (full) | FastMCP layer (all) | Initial migration; see specs |
 
 ## Roadmap
 
-- Reuse the upstream engine layer (`compile`, `interactive`, `verify`, etc.).
-- Build our own MCP exposure layer: tool definitions, descriptions,
-  parameters, and a possible split between interactive and batch servers.
+- Build our own MCP exposure layer on top of `core`.
+- Re-add the deferred wrapper tests (see
+  `specifications/engine-migration-report.md` §5 Phase 4).
 
 ## License
 
-See [LICENSE](LICENSE) and [NOTICE](NOTICE). The `third_party/rocq-mcp`
+See [LICENSE](LICENSE) and [NOTICE](NOTICE).  The `third_party/rocq-mcp`
 submodule is the rocq-mcp project, Copyright LLM4Rocq contributors, licensed
-under the Apache License, Version 2.0.
+under the Apache License, Version 2.0.  `core/` is a derived work of that
+project under the same license.

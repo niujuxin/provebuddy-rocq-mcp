@@ -1,74 +1,57 @@
 # provebuddy-rocq-mcp
 
-An [MCP](https://modelcontextprotocol.io/) server that lets AI agents write,
-check, and iterate on [Rocq](https://rocq-prover.org/) (formerly Coq) proofs.
+Rocq/Coq proof engine, reorganized from the
+[rocq-mcp](https://github.com/LLM4Rocq/rocq-mcp) project into a
+self-contained package.  This repository currently contains the **engine
+layer only** (`core/`): the upstream FastMCP server and its 13 tool
+wrappers are removed for now.  Our own MCP exposure layer will be built on
+top of `core` in a later round.
 
-Built on top of the [rocq-mcp](https://github.com/LLM4Rocq/rocq-mcp) project,
-with a focus on making proof development fast and reliable for agentic
-workflows.
+## What is here
 
-## Features
-
-- **Batch compilation** — compile and verify whole `.v` files with the Rocq
-  compiler for final, authoritative checks, including audits of admits,
-  axioms, and statement mismatches.
-- **Interactive proof sessions** — keep imports warm in a background
-  interactive backend, inspect the current goal, step through tactics one at
-  a time, and try several candidate tactics in a single call.
-- **Environment tooling** — search for lemmas, inspect axioms and notations,
-  and browse the structure of `.v` files.
-- **Operator diagnostics** — health checks and runtime diagnostics for the
-  underlying toolchain and interactive backend.
+- `core/` — the borrowed engine, organized as ours:
+  - `config.py` — env-var configuration and availability checks
+  - `workspace.py` — workspace validation, path resolution, dune support,
+    `.vo` epoch tracking
+  - `pet.py` — pet (pytanque/coq-lsp) subprocess lifecycle, locks,
+    memory watchdog, `_run_with_pet`
+  - `envelope.py` — failure envelopes and reason sets
+  - `state.py` — `make_runtime_state()` / `shutdown_runtime()` (plain
+    functions; the upstream FastMCP lifespan, de-MCP'd)
+  - `compile.py` + `coqc.py` — coqc-based compile/verify orchestration and
+    subprocess/parsing
+  - `interactive.py` + `sessions.py` — interactive proof operations and
+    session bookkeeping
+  - `verify.py`, `proof_walk.py`, `compile_enrichment.py`, `diag.py`,
+    `health.py` — moved as-is
+- `tests/` — the upstream test suite, re-pointed to `core.*` (it tests
+  `core`, not upstream).  MCP-wrapper-specific tests are deferred until the
+  MCP layer returns; see
+  [specifications/engine-migration-report.md](specifications/engine-migration-report.md).
+- `third_party/rocq-mcp/` — pinned upstream submodule, kept as a read-only
+  reference for future syncs.
 
 ## Requirements
 
 - Python 3.11+
-- [Rocq / Coq](https://rocq-prover.org/) — `coqc` must be on your `PATH`
-- `pet` (from [coq-lsp](https://github.com/ejgallego/coq-lsp)) — optional but
-  recommended; required for the interactive tools
-- An MCP client, such as Claude Code or any MCP-capable agent harness
+- `coqc` on `PATH` for compile/verify tools (integration tests skip without it)
+- `pet` (from [coq-lsp](https://github.com/ejgallego/coq-lsp)) for the
+  interactive tools (optional; tests skip without it)
 
-## Installation
+## Install & test
 
-Once the package is published:
+```bash
+uv pip install -e ".[dev]"
+pytest tests/
+```
 
-    uv pip install provebuddy-rocq-mcp
+## Roadmap
 
-Register the server with your MCP client:
-
-    "mcpServers": {
-      "provebuddy-rocq-mcp": {
-        "command": "rocq-mcp",
-        "type": "stdio"
-      }
-    }
-
-A resident shared instance over HTTP/SSE is also supported for deployments
-where many agent sessions share one server.
-
-## Quick start
-
-1. Call the health-check tool first to confirm which Rocq toolchain the server
-   is using.
-2. For final verification of a finished proof, compile the whole `.v` file and
-   run the staged verification tool to audit admits, axioms, and statement
-   mismatches.
-3. For fast iteration on a proof, open an interactive session, inspect the
-   current goal, and step through tactics until the proof closes.
-
-## Configuration
-
-The server is configured through environment variables (workspace root,
-timeouts, state-table size, memory limits, and more). See the documentation
-under `docs/` for the full reference.
-
-## Status
-
-Under active development — no release yet. This repository currently contains
-the project base; the server implementation is being built.
+- Build our own MCP exposure layer on top of `core` (tool definitions,
+  descriptions, parameters, and a possible interactive/batch server split).
+- Re-add the deferred wrapper tests once the MCP layer exists.
 
 ## License
 
-Apache License, Version 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
-
+Apache License, Version 2.0.  See [LICENSE](LICENSE) and [NOTICE](NOTICE).
 For contributors, see [DEVELOPMENT.md](DEVELOPMENT.md).

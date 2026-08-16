@@ -1,9 +1,11 @@
 provebuddy-rocq-mcp
 Copyright 2026 provebuddy contributors
 
-This product includes software from the rocq-mcp project
+This product includes software derived from the rocq-mcp project
 (https://github.com/LLM4Rocq/rocq-mcp), Copyright LLM4Rocq contributors,
 licensed under the Apache License, Version 2.0.
 
-This repository is currently an empty base and contains no modifications
-to the rocq-mcp code.
+The `core/` package is a reorganized, self-contained copy of the rocq-mcp
+engine (pinned at commit 6983113d0844c0b7f987c79dab13988445109bfb,
+version 0.3.1), with the FastMCP layer removed.  The unmodified upstream
+source remains available as the `third_party/rocq-mcp` git submodule.
