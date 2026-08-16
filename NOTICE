@@ -1,0 +1,9 @@
+provebuddy-rocq-mcp
+Copyright 2026 provebuddy contributors
+
+This product includes software from the rocq-mcp project
+(https://github.com/LLM4Rocq/rocq-mcp), Copyright LLM4Rocq contributors,
+licensed under the Apache License, Version 2.0.
+
+This repository is currently an empty base and contains no modifications
+to the rocq-mcp code.

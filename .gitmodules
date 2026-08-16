@@ -1,0 +1,3 @@
+[submodule "third_party/rocq-mcp"]
+	path = third_party/rocq-mcp
+	url = https://github.com/LLM4Rocq/rocq-mcp.git
