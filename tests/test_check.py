@@ -27,6 +27,8 @@ import pytest
 
 from tests.conftest import PET_AVAILABLE
 
+from server.tools.interactive import rocq_check
+
 pytestmark = pytest.mark.skipif(not PET_AVAILABLE, reason="pet not available")
 
 

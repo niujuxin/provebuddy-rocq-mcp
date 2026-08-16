@@ -329,3 +329,37 @@ class TestRunNotationsReal:
 class TestRocqNotationsTimeout:
     """timeout on the rocq_notations MCP wrapper."""
 
+
+
+# ---------------------------------------------------------------------------
+# Restored MCP-wrapper tests (adapted from upstream; see specifications/mcp-layer-plan.md)
+# ---------------------------------------------------------------------------
+
+class TestRocqNotationsTimeout:
+    """timeout on the rocq_notations MCP wrapper."""
+
+    @pytest.mark.asyncio
+    async def test_above_cap_clamped_with_signal(self, monkeypatch, tmp_path):
+        from server.tools.query import rocq_notations
+        from tests.conftest import _MockContext
+        import server.tools.query as _server
+
+        captured: dict = {}
+
+        async def mock_run_notations(**kwargs):
+            captured.update(kwargs)
+            return {"success": True, "output": "mock"}
+
+        monkeypatch.setattr(_server, "run_notations", mock_run_notations)
+        monkeypatch.setattr(core_envelope, "_validate_workspace", lambda ws: None)
+
+        result = await rocq_notations(
+            statement="n + 0 = n",
+            preamble="",
+            workspace=str(tmp_path),
+            timeout=5000,
+            ctx=_MockContext({"pet_client": None}),
+        )
+
+        assert result["clamped_timeout"] == core_config.ROCQ_QUERY_TIMEOUT_CAP
+        assert captured["timeout"] == float(core_config.ROCQ_QUERY_TIMEOUT_CAP)

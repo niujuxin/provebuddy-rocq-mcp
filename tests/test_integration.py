@@ -17,6 +17,9 @@ import pytest
 
 from tests.conftest import COQC_AVAILABLE, PET_AVAILABLE, _MockContext
 
+from server.tools.compile import rocq_compile, rocq_compile_file, rocq_verify
+from server.tools.interactive import rocq_check
+
 
 def _call_rocq_compile(**kwargs):
     """Run the async server wrapper from synchronous tests."""

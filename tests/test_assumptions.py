@@ -1169,3 +1169,91 @@ class TestCollectTocNames:
         toc = [("x", [_e("x", 2)])]
         names = _collect_toc_names(toc, source=source)
         assert names == ["Real.x"]
+
+
+# ---------------------------------------------------------------------------
+# Restored MCP-wrapper tests (adapted from upstream; see specifications/mcp-layer-plan.md)
+# ---------------------------------------------------------------------------
+
+class TestRocqAssumptionsWrapper:
+    """Tests for the rocq_assumptions MCP wrapper in server.py."""
+
+    @pytest.mark.asyncio
+    async def test_ctx_none_returns_error(self):
+        from server.tools.query import rocq_assumptions
+
+        result = await rocq_assumptions(name="foo", file="test.v", ctx=None)
+        assert result["success"] is False
+        assert "context" in result["error"].lower()
+
+    @pytest.mark.asyncio
+    async def test_invalid_workspace_returns_error(self):
+        from server.tools.query import rocq_assumptions
+        from tests.conftest import _MockContext
+
+        mock_ctx = _MockContext({})
+        result = await rocq_assumptions(
+            name="foo",
+            file="test.v",
+            workspace="/nonexistent_rocq_workspace_xyz",
+            ctx=mock_ctx,
+        )
+        assert result["success"] is False
+
+    @pytest.mark.asyncio
+    async def test_params_forwarded(self, monkeypatch, tmp_path):
+        """Wrapper should forward all params to run_assumptions."""
+        from server.tools.query import rocq_assumptions
+        from tests.conftest import _MockContext
+        import server.tools.query as _server
+
+        captured = {}
+
+        async def mock_run_assumptions(**kwargs):
+            captured.update(kwargs)
+            return {"success": True, "theorem": "my_thm", "assumptions": []}
+
+        monkeypatch.setattr(_server, "run_assumptions", mock_run_assumptions)
+        monkeypatch.setattr(core_envelope, "_validate_workspace", lambda ws: None)
+
+        mock_ctx = _MockContext({"pet_client": None})
+
+        await rocq_assumptions(
+            name="my_thm",
+            file="proof.v",
+            workspace=str(tmp_path),
+            ctx=mock_ctx,
+        )
+
+        assert captured["name"] == "my_thm"
+        assert captured["file"] == "proof.v"
+        assert captured["lifespan_state"] is mock_ctx.lifespan_context
+
+    @pytest.mark.asyncio
+    async def test_timeout_above_cap_clamped_with_signal(self, monkeypatch, tmp_path):
+        """Wrapper clamps an over-cap timeout and echoes ``clamped_timeout``."""
+        from server.tools.query import rocq_assumptions
+        from tests.conftest import _MockContext
+        import server.tools.query as _server
+
+        captured: dict = {}
+
+        async def mock_run_assumptions(**kwargs):
+            captured.update(kwargs)
+            return {"success": True, "theorem": "my_thm", "assumptions": []}
+
+        monkeypatch.setattr(_server, "run_assumptions", mock_run_assumptions)
+        monkeypatch.setattr(core_envelope, "_validate_workspace", lambda ws: None)
+
+        mock_ctx = _MockContext({"pet_client": None})
+
+        result = await rocq_assumptions(
+            name="my_thm",
+            file="proof.v",
+            workspace=str(tmp_path),
+            timeout=5000,
+            ctx=mock_ctx,
+        )
+
+        assert result["clamped_timeout"] == core_config.ROCQ_QUERY_TIMEOUT_CAP
+        assert captured["timeout"] == float(core_config.ROCQ_QUERY_TIMEOUT_CAP)

@@ -69,6 +69,8 @@ from core.verify import (
     verification_hint,
 )
 
+from server.tools.compile import rocq_verify
+
 # =========================================================================
 # PART A: Unit tests (no coqc needed)
 # =========================================================================

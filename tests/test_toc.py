@@ -209,3 +209,36 @@ class TestTocPathTraversal:
 class TestRocqTocTimeout:
     """timeout on the rocq_toc MCP wrapper."""
 
+
+
+# ---------------------------------------------------------------------------
+# Restored MCP-wrapper tests (adapted from upstream; see specifications/mcp-layer-plan.md)
+# ---------------------------------------------------------------------------
+
+class TestRocqTocTimeout:
+    """timeout on the rocq_toc MCP wrapper."""
+
+    @pytest.mark.asyncio
+    async def test_above_cap_clamped_with_signal(self, monkeypatch, tmp_path):
+        from server.tools.query import rocq_toc
+        from tests.conftest import _MockContext
+        import server.tools.query as _server
+
+        captured: dict = {}
+
+        async def mock_run_toc(**kwargs):
+            captured.update(kwargs)
+            return {"success": True, "output": "mock"}
+
+        monkeypatch.setattr(_server, "run_toc", mock_run_toc)
+        monkeypatch.setattr(core_envelope, "_validate_workspace", lambda ws: None)
+
+        result = await rocq_toc(
+            file="proof.v",
+            workspace=str(tmp_path),
+            timeout=5000,
+            ctx=_MockContext({"pet_client": None}),
+        )
+
+        assert result["clamped_timeout"] == core_config.ROCQ_QUERY_TIMEOUT_CAP
+        assert captured["timeout"] == float(core_config.ROCQ_QUERY_TIMEOUT_CAP)

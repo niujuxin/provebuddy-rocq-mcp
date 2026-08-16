@@ -25,6 +25,8 @@ from tests.conftest import (
 )
 from core.compile import run_compile_file
 
+from server.tools.compile import rocq_compile_file
+
 pytestmark = pytest.mark.skipif(not COQC_AVAILABLE, reason="coqc not available")
 
 

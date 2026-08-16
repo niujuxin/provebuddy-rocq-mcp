@@ -47,6 +47,8 @@ from tests.conftest import (
     make_lifespan_state,
 )
 
+from server.tools.compile import rocq_compile_file
+
 pytestmark = pytest.mark.skipif(
     not (COQC_AVAILABLE and PET_AVAILABLE),
     reason="multi-error tests require coqc + pet on PATH",

@@ -1,12 +1,13 @@
 [project]
 name = "provebuddy-rocq-mcp"
 version = "0.1.0"
-description = "Rocq/Coq proof engine (engine layer only; no MCP server yet)"
+description = "Rocq/Coq proof engine with a thin FastMCP 3.x STDIO server"
 license = "Apache-2.0"
 requires-python = ">=3.11"
 dependencies = [
     "psutil>=5.9",
     "pytanque @ git+https://github.com/LLM4Rocq/pytanque@v0.2.2",
+    "fastmcp>=3.1,<4",
 ]
 
 [project.optional-dependencies]
@@ -20,9 +21,12 @@ dev = [
 requires = ["setuptools>=68.0"]
 build-backend = "setuptools.build_meta"
 
+[project.scripts]
+provebuddy-rocq-mcp = "server:main"
+
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["core*", "utils*"]
+include = ["core*", "utils*", "server*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

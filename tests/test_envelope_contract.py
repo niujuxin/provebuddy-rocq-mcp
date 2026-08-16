@@ -312,3 +312,79 @@ class TestCompileEnvelope:
             timeout=5,
         )
         _assert_failure_envelope(result, expected_reason="validation")
+
+
+# ---------------------------------------------------------------------------
+# Restored MCP-wrapper tests (adapted from upstream; see specifications/mcp-layer-plan.md)
+# ---------------------------------------------------------------------------
+
+class TestWrapperNoContextEnvelope:
+    """Every ``@mcp.tool`` wrapper has a ``ctx is None`` guard that
+    short-circuits before reaching the core ``run_*`` implementation.
+    The audit found that all eight returned ``{success: False,
+    error: "Internal error: no MCP context."}`` with no ``reason``
+    — a hard envelope violation.  Pin the fix here so a future tool
+    addition cannot regress."""
+
+    @pytest.mark.asyncio
+    async def test_rocq_query_no_ctx(self):
+        from server.tools import rocq_query
+
+        _assert_failure_envelope(
+            await rocq_query(command="Check 1.", ctx=None),
+            expected_reason="validation",
+        )
+
+    @pytest.mark.asyncio
+    async def test_rocq_assumptions_no_ctx(self):
+        from server.tools import rocq_assumptions
+
+        _assert_failure_envelope(
+            await rocq_assumptions(name="foo", file="x.v", ctx=None),
+            expected_reason="validation",
+        )
+
+    @pytest.mark.asyncio
+    async def test_rocq_check_no_ctx(self):
+        from server.tools import rocq_check
+
+        _assert_failure_envelope(
+            await rocq_check(body="reflexivity.", from_state=1, ctx=None),
+            expected_reason="validation",
+        )
+
+    @pytest.mark.asyncio
+    async def test_rocq_step_multi_no_ctx(self):
+        from server.tools import rocq_step_multi
+
+        _assert_failure_envelope(
+            await rocq_step_multi(tactics=["reflexivity."], from_state=1, ctx=None),
+            expected_reason="validation",
+        )
+
+    @pytest.mark.asyncio
+    async def test_rocq_start_no_ctx(self):
+        from server.tools import rocq_start
+
+        _assert_failure_envelope(
+            await rocq_start(file="x.v", theorem="t", ctx=None),
+            expected_reason="validation",
+        )
+
+    @pytest.mark.asyncio
+    async def test_rocq_toc_no_ctx(self):
+        from server.tools import rocq_toc
+
+        _assert_failure_envelope(
+            await rocq_toc(file="x.v", ctx=None),
+            expected_reason="validation",
+        )
+
+    @pytest.mark.asyncio
+    async def test_rocq_notations_no_ctx(self):
+        from server.tools import rocq_notations
+
+        _assert_failure_envelope(
+            await rocq_notations(statement="x + y", ctx=None),
+            expected_reason="validation",
+        )

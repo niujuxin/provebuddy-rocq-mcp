@@ -34,6 +34,8 @@ from tests.conftest import (
 )
 from core.config import _PYTANQUE_NOT_INSTALLED_HINT
 
+from server.tools.compile import rocq_compile
+
 pytestmark = pytest.mark.skipif(not COQC_AVAILABLE, reason="coqc not available")
 
 

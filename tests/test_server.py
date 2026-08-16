@@ -2557,3 +2557,493 @@ class TestCheckPetAvailability:
             "rocq_notations",
         ):
             assert tool in msg
+
+
+# ---------------------------------------------------------------------------
+# Restored MCP-wrapper tests (adapted from upstream; see specifications/mcp-layer-plan.md)
+# ---------------------------------------------------------------------------
+
+
+class TestWrapperWorkspaceAutoDetect:
+    """Integration: each file-accepting tool wires the helper into the workspace.
+
+    These tests would catch a regression where one of the five
+    ``_find_project_root_from_file`` call sites is silently removed during
+    a refactor.  They spy on the envelope's ``_validate_workspace`` (the
+    boundary right after the auto-detection) to capture the workspace that
+    flows in, and stub each tool's downstream implementation so the call
+    short-circuits.
+    """
+
+    @pytest.fixture
+    def project_with_file(self, tmp_path):
+        """Create _RocqProject in *tmp_path* and a foo.v in a subdir."""
+        (tmp_path / "_RocqProject").write_text("-Q . M\n")
+        sub = tmp_path / "src"
+        sub.mkdir()
+        f = sub / "foo.v"
+        f.write_text("")
+        return tmp_path, f
+
+    @staticmethod
+    def _setup_spies(monkeypatch):
+        """Spy ``_validate_workspace`` and stub all 5 impl functions.
+
+        The wrapper modules import the ``run_*`` names directly, so each
+        stub patches the wrapper module that binds the name; the
+        validation spy patches ``core.envelope`` where
+        ``_resolve_tool_envelope`` resolves it.
+
+        Returns a dict that captures the workspace passed to validation.
+        """
+        from server.tools import compile as _ct
+        from server.tools import interactive as _it
+        from server.tools import query as _qt
+
+        seen: dict = {}
+
+        def spy_validate(ws):
+            seen["workspace"] = ws
+            return None
+
+        async def stub(*_args, **_kwargs):
+            return {"success": True, "output": ""}
+
+        monkeypatch.setattr(core_envelope, "_validate_workspace", spy_validate)
+        monkeypatch.setattr(_ct, "run_compile_file_with_state", stub)
+        monkeypatch.setattr(_qt, "run_query", stub)
+        monkeypatch.setattr(_qt, "run_assumptions", stub)
+        monkeypatch.setattr(_qt, "run_toc", stub)
+        monkeypatch.setattr(_it, "run_start", stub)
+        return seen
+
+    @pytest.mark.parametrize(
+        "tool_name,extra_kwargs",
+        [
+            ("rocq_compile_file", {}),
+            ("rocq_query", {"command": "Check nat."}),
+            ("rocq_assumptions", {"name": "t"}),
+            ("rocq_toc", {}),
+            ("rocq_start", {"theorem": "t"}),
+        ],
+    )
+    async def test_wrapper_autodetects_workspace(
+        self, tool_name, extra_kwargs, project_with_file, monkeypatch
+    ):
+        """Each wrapper auto-detects workspace from the file's project root."""
+        import server.tools as _tools
+        from tests.conftest import _MockContext
+
+        proj, f = project_with_file
+        seen = self._setup_spies(monkeypatch)
+        ctx = _MockContext({"pet_client": None, "pet_timeout": 30.0})
+
+        tool = getattr(_tools, tool_name)
+        await tool(file=str(f), ctx=ctx, **extra_kwargs)
+
+        assert seen["workspace"] == str(Path(proj).absolute()), tool_name
+
+    async def test_explicit_workspace_overrides_autodetect(
+        self, project_with_file, monkeypatch
+    ):
+        """An explicit ``workspace=`` arg bypasses auto-detection."""
+        import server.tools as _tools
+        from tests.conftest import _MockContext
+
+        _proj, f = project_with_file
+        seen = self._setup_spies(monkeypatch)
+        ctx = _MockContext({"pet_client": None, "pet_timeout": 30.0})
+
+        explicit = "/some/other/dir"
+        await _tools.rocq_toc(file=str(f), workspace=explicit, ctx=ctx)
+
+        assert seen["workspace"] == explicit
+
+
+class TestWorkspaceWarning:
+    """End-to-end: each entry-point attaches workspace_warning when the
+    resolved workspace lacks a project marker.
+
+    Mirrors ``TestWrapperWorkspaceAutoDetect`` — spies validation and
+    stubs the downstream impl so we exercise the wrapper logic in
+    isolation.  Confirms the fix for the silent synthetic-flags
+    fallback when a workspace has no project marker.
+    """
+
+    @staticmethod
+    def _setup_spies(monkeypatch):
+        from server.tools import compile as _ct
+        from server.tools import interactive as _it
+        from server.tools import query as _qt
+
+        async def stub(*_args, **_kwargs):
+            return {"success": True, "output": ""}
+
+        # Validation always passes; we're testing the warning branch.
+        monkeypatch.setattr(core_envelope, "_validate_workspace", lambda _ws: None)
+        monkeypatch.setattr(_ct, "run_compile_with_state", stub)
+        monkeypatch.setattr(_ct, "run_compile_file_with_state", stub)
+        monkeypatch.setattr(_ct, "run_verify", stub)
+        monkeypatch.setattr(_qt, "run_query", stub)
+        monkeypatch.setattr(_qt, "run_assumptions", stub)
+        monkeypatch.setattr(_qt, "run_toc", stub)
+        monkeypatch.setattr(_qt, "run_notations", stub)
+        monkeypatch.setattr(_it, "run_start", stub)
+
+    @pytest.fixture
+    def markerless_dir(self, tmp_path):
+        """A directory with no _RocqProject / _CoqProject / dune-project."""
+        sub = tmp_path / "no_marker"
+        sub.mkdir()
+        return sub
+
+    @pytest.fixture
+    def marker_dir(self, tmp_path):
+        """A directory with a _RocqProject file."""
+        sub = tmp_path / "with_marker"
+        sub.mkdir()
+        (sub / "_RocqProject").write_text("-Q . M\n")
+        return sub
+
+    @pytest.fixture
+    def _ctx(self):
+        from tests.conftest import _MockContext
+
+        return _MockContext({"pet_client": None, "pet_timeout": 30.0})
+
+    # ---- explicit workspace= without marker → warning fires --------------
+
+    @pytest.mark.parametrize(
+        "tool_name,extra_kwargs",
+        [
+            ("rocq_compile", {"source": "Theorem t : True. Proof. exact I. Qed."}),
+            ("rocq_compile_file", {"file": "foo.v"}),
+            (
+                "rocq_verify",
+                {
+                    "proof": "Theorem t : True. Proof. exact I. Qed.",
+                    "problem_name": "t",
+                    "problem_statement": "Theorem t : True. Admitted.",
+                },
+            ),
+            ("rocq_query", {"command": "Check nat."}),
+            ("rocq_assumptions", {"name": "t", "file": "foo.v"}),
+            ("rocq_toc", {"file": "foo.v"}),
+            ("rocq_notations", {"statement": "True"}),
+            ("rocq_start", {"file": "foo.v", "theorem": "t"}),
+        ],
+    )
+    async def test_explicit_workspace_without_marker_warns(
+        self, tool_name, extra_kwargs, markerless_dir, _ctx, monkeypatch
+    ):
+        import server.tools as _tools
+
+        self._setup_spies(monkeypatch)
+        tool = getattr(_tools, tool_name)
+        result = await tool(workspace=str(markerless_dir), ctx=_ctx, **extra_kwargs)
+
+        assert "workspace_warning" in result, tool_name
+        warning = result["workspace_warning"]
+        # Canonical text components.
+        assert "No _RocqProject / _CoqProject / dune-project" in warning
+        assert str(markerless_dir) in warning
+        # Generic phrasing about unqualified library references (no
+        # project-specific example symbol).
+        assert "unqualified library references" in warning
+        # Action-first recovery hint covering the file= path.
+        assert "auto-detect from" in warning
+
+    @pytest.mark.parametrize(
+        "tool_name,extra_kwargs",
+        [
+            ("rocq_compile", {"source": "Theorem t : True. Proof. exact I. Qed."}),
+            ("rocq_compile_file", {"file": "foo.v"}),
+            (
+                "rocq_verify",
+                {
+                    "proof": "Theorem t : True. Proof. exact I. Qed.",
+                    "problem_name": "t",
+                    "problem_statement": "Theorem t : True. Admitted.",
+                },
+            ),
+            ("rocq_query", {"command": "Check nat."}),
+            ("rocq_assumptions", {"name": "t", "file": "foo.v"}),
+            ("rocq_toc", {"file": "foo.v"}),
+            ("rocq_notations", {"statement": "True"}),
+            ("rocq_start", {"file": "foo.v", "theorem": "t"}),
+        ],
+    )
+    async def test_explicit_workspace_with_marker_quiet(
+        self, tool_name, extra_kwargs, marker_dir, _ctx, monkeypatch
+    ):
+        """A workspace that DOES have a marker is quiet."""
+        import server.tools as _tools
+
+        self._setup_spies(monkeypatch)
+        tool = getattr(_tools, tool_name)
+        result = await tool(workspace=str(marker_dir), ctx=_ctx, **extra_kwargs)
+
+        assert "workspace_warning" not in result, tool_name
+
+    # ---- auto-detect cases -----------------------------------------------
+
+    async def test_auto_detect_with_marker_quiet(self, tmp_path, _ctx, monkeypatch):
+        """When auto-detect finds a project root, no warning fires even
+        though the user didn't pass workspace= explicitly.
+
+        Strict policy: a successful walk-up is the happy path.
+        """
+        import server.tools as _tools
+
+        (tmp_path / "_RocqProject").write_text("-Q . M\n")
+        sub = tmp_path / "src"
+        sub.mkdir()
+        f = sub / "foo.v"
+        f.write_text("")
+
+        self._setup_spies(monkeypatch)
+        result = await _tools.rocq_toc(file=str(f), ctx=_ctx)
+        assert "workspace_warning" not in result
+
+    async def test_auto_detect_misses_with_file_hint_warns(
+        self, markerless_dir, _ctx, monkeypatch
+    ):
+        """When the user passes file= but no marker is found anywhere up
+        the tree AND ROCQ_WORKSPACE has no marker either, the warning
+        fires — they're trying to work with a real project and the
+        synthetic fallback will likely surprise them.
+        """
+        import server.tools as _tools
+
+        f = markerless_dir / "foo.v"
+        f.write_text("")
+        # Point ROCQ_WORKSPACE at the markerless dir so the fall-through
+        # chain (auto-detect None -> ROCQ_WORKSPACE) lands on it.
+        monkeypatch.setattr(core_config, "ROCQ_WORKSPACE", str(markerless_dir))
+
+        self._setup_spies(monkeypatch)
+        result = await _tools.rocq_toc(file=str(f), ctx=_ctx)
+
+        assert "workspace_warning" in result
+        assert str(markerless_dir) in result["workspace_warning"]
+
+    async def test_explicit_workspace_plus_file_hint_warns(
+        self, markerless_dir, _ctx, monkeypatch
+    ):
+        """Covers the matrix cell where the caller supplies BOTH
+        ``workspace=`` AND ``file=``.  Confirms that having ``file=`` does
+        not short-circuit the ``explicit=True`` branch — the warning still
+        fires because the resolved workspace lacks a marker.
+        """
+        import server.tools as _tools
+
+        f = markerless_dir / "foo.v"
+        f.write_text("")
+
+        self._setup_spies(monkeypatch)
+        result = await _tools.rocq_toc(
+            workspace=str(markerless_dir), file=str(f), ctx=_ctx
+        )
+
+        assert "workspace_warning" in result
+        assert str(markerless_dir) in result["workspace_warning"]
+
+    async def test_no_file_no_explicit_workspace_quiet(self, _ctx, monkeypatch):
+        """A source-string tool with no file= and no explicit workspace=
+        is quiet — that's the legitimate scratch / one-off workflow,
+        not a config bug.
+        """
+        import server.tools as _tools
+
+        # ROCQ_WORKSPACE is whatever the test env has; force a markerless
+        # tmpdir to be sure.
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            monkeypatch.setattr(core_config, "ROCQ_WORKSPACE", td)
+            self._setup_spies(monkeypatch)
+            result = await _tools.rocq_compile(
+                source="Theorem t : True. Proof. exact I. Qed.", ctx=_ctx
+            )
+
+        assert "workspace_warning" not in result
+
+
+class TestVoRebuildWarning:
+    """End-to-end: rocq_compile_file attaches vo_rebuild_warning iff
+    rebuilt .vo files coincide with active sessions in the workspace.
+
+    Stubs the actual coqc call via run_compile_file so we exercise only
+    the snapshot/diff/warning wiring.
+    """
+
+    @pytest.fixture
+    def _ctx(self):
+        from tests.conftest import _MockContext
+
+        return _MockContext({"pet_client": None, "pet_timeout": 30.0})
+
+    @staticmethod
+    def _stub_run_compile_file(monkeypatch, result=None):
+        """Replace ``run_compile_file`` (the source of the coqc call) with
+        a stub that returns *result* unchanged.  Patched on the
+        compile_enrichment module because that's where it's looked up.
+        """
+        from core import compile_enrichment as _ce
+
+        if result is None:
+            result = {"success": True, "output": ""}
+
+        def _stub(*_a, **_kw):
+            return dict(result)
+
+        monkeypatch.setattr(_ce, "run_compile_file", _stub)
+
+    @staticmethod
+    def _add_session(workspace: Path, file_under_ws: Path):
+        """Register one interactive session whose resolved_file lives
+        under *workspace*.
+        """
+        from core.sessions import _state_add
+
+        st = mock.MagicMock()
+        st.proof_finished = False
+        _state_add(
+            state=st,
+            file=file_under_ws.name,
+            theorem="t",
+            workspace=str(workspace),
+            parent_id=None,
+            tactic=None,
+            step=0,
+            resolved_file=str(file_under_ws.resolve()),
+        )
+
+    async def test_no_rebuild_no_warning(self, tmp_path, _ctx, monkeypatch):
+        """coqc succeeds without touching any .vo → no warning."""
+        from server.tools.compile import rocq_compile_file
+
+        (tmp_path / "_RocqProject").write_text("-Q . M\n")
+        f = tmp_path / "foo.v"
+        f.write_text("Theorem t : True. Proof. exact I. Qed.\n")
+        # Pre-existing .vo that won't change between snapshots.
+        (tmp_path / "stale.vo").write_text("x")
+
+        # Even with an active session, no rebuild → quiet.
+        self._add_session(tmp_path, f)
+        self._stub_run_compile_file(monkeypatch)
+
+        result = await rocq_compile_file(
+            file=str(f), workspace=str(tmp_path), ctx=_ctx
+        )
+        assert "vo_rebuild_warning" not in result
+
+    async def test_rebuild_no_sessions_no_warning(self, tmp_path, _ctx, monkeypatch):
+        """Rebuild detected, but no interactive session in workspace → quiet."""
+        from server.tools.compile import rocq_compile_file
+
+        (tmp_path / "_RocqProject").write_text("-Q . M\n")
+        f = tmp_path / "foo.v"
+        f.write_text("Theorem t : True. Proof. exact I. Qed.\n")
+
+        snapshots = [
+            {"/x.vo": 1.0},
+            {"/x.vo": 2.0},  # mtime changed → "rebuilt"
+        ]
+
+        def _fake_snapshot(_ws):
+            return snapshots.pop(0)
+
+        monkeypatch.setattr(core_workspace, "_snapshot_vo_mtimes", _fake_snapshot)
+        self._stub_run_compile_file(monkeypatch)
+
+        result = await rocq_compile_file(
+            file=str(f), workspace=str(tmp_path), ctx=_ctx
+        )
+        assert "vo_rebuild_warning" not in result
+
+    async def test_rebuild_with_sessions_warning_present(
+        self, tmp_path, _ctx, monkeypatch
+    ):
+        """Rebuild + active session in workspace → warning fires and
+        names the workspace path and the session count.
+        """
+        from server.tools.compile import rocq_compile_file
+
+        (tmp_path / "_RocqProject").write_text("-Q . M\n")
+        f = tmp_path / "foo.v"
+        f.write_text("Theorem t : True. Proof. exact I. Qed.\n")
+
+        snapshots = [
+            {"/x.vo": 1.0, "/y.vo": 1.0},
+            {"/x.vo": 2.0, "/y.vo": 3.0},  # both rewritten → 2 rebuilt
+        ]
+
+        def _fake_snapshot(_ws):
+            return snapshots.pop(0)
+
+        monkeypatch.setattr(core_workspace, "_snapshot_vo_mtimes", _fake_snapshot)
+        self._stub_run_compile_file(monkeypatch)
+        self._add_session(tmp_path, f)
+
+        result = await rocq_compile_file(
+            file=str(f), workspace=str(tmp_path), ctx=_ctx
+        )
+        assert "vo_rebuild_warning" in result
+        warning = result["vo_rebuild_warning"]
+        assert str(tmp_path) in warning
+        assert "1 interactive session(s)" in warning
+        assert "2 .vo file(s)" in warning
+        assert "rocq_start" in warning
+
+    async def test_over_cap_quiet(self, tmp_path, _ctx, monkeypatch):
+        """Workspace exceeds _VO_SCAN_FILE_CAP → snapshot returns None and
+        the warning stays quiet even with mtime changes and active sessions.
+        """
+        from server.tools.compile import rocq_compile_file
+
+        (tmp_path / "_RocqProject").write_text("-Q . M\n")
+        f = tmp_path / "foo.v"
+        f.write_text("Theorem t : True. Proof. exact I. Qed.\n")
+
+        # Cap to 2 .vo paths; create 5 to blow past it.
+        monkeypatch.setattr(core_workspace, "_VO_SCAN_FILE_CAP", 2)
+        for i in range(5):
+            (tmp_path / f"f{i}.vo").write_text("x")
+
+        self._add_session(tmp_path, f)
+        self._stub_run_compile_file(monkeypatch)
+
+        result = await rocq_compile_file(
+            file=str(f), workspace=str(tmp_path), ctx=_ctx
+        )
+        assert "vo_rebuild_warning" not in result
+
+
+class TestReadmeUsagePatterns:
+    """Catch accidental deletion of the 'Recommended usage patterns' sections.
+
+    Pure docs assertion — no Rocq invocation.  If these sections are
+    renamed deliberately, update this test.
+    """
+
+    def _readme_text(self) -> str:
+        readme = Path(__file__).resolve().parent.parent / "README.md"
+        return readme.read_text(encoding="utf-8")
+
+    def test_recommended_patterns_section_present(self):
+        readme = self._readme_text()
+        assert "## Recommended usage patterns" in readme
+
+    def test_multi_tactic_exploration_subsection_present(self):
+        readme = self._readme_text()
+        assert "Multi-tactic exploration" in readme
+        # Canonical example references both tools.
+        assert "rocq_check" in readme
+        assert "rocq_step_multi" in readme
+
+    def test_imports_and_scopes_subsection_present(self):
+        readme = self._readme_text()
+        assert "Imports and scopes in `rocq_query`" in readme
+        # Names the parameter agents should reach for.
+        assert "preamble=" in readme

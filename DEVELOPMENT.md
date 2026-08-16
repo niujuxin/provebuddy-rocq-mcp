@@ -21,6 +21,14 @@ Notes for people working on this repository.
     |   |-- compile_enrichment.py# pet state capture on compile errors
     |   |-- diag.py              # diagnostics snapshot builder
     |   `-- health.py            # toolchain health / switch detection
+    |-- server/                  # our MCP layer (thin FastMCP 3.x, STDIO)
+    |   |-- __init__.py          # FastMCP app, lifespan, registration, main()
+    |   |-- __main__.py          # python -m server
+    |   `-- tools/               # verbatim upstream @mcp.tool wrappers (10)
+    |       |-- __init__.py      # TOOLS registry
+    |       |-- compile.py       # rocq_compile / rocq_compile_file / rocq_verify
+    |       |-- query.py         # rocq_query / rocq_assumptions / rocq_toc / rocq_notations
+    |       `-- interactive.py   # rocq_start / rocq_step_multi / rocq_check
     |-- utils/                   # pure helpers (reserved; empty)
     |-- tests/                   # upstream tests, imports re-pointed to core.*
     |-- specifications/          # migration spec, baseline & triage records
@@ -54,9 +62,12 @@ asyncio (the suite hangs inside the Codex sandbox; run it unsandboxed).
 
 `core/` is a self-contained reorganization of upstream `rocq-mcp`'s engine.
 No upstream package is imported; no `rocq_mcp` package exists in this
-repository.  The FastMCP layer (app, 13 tool wrappers, entry point) was
-removed.  The permanent reference for this relationship is
-`specifications/engine-migration-report.md`.
+repository.  The FastMCP layer was removed from `core/` and rebuilt as our
+own thin MCP server in `server/` (10 of upstream's 13 tools, wrappers
+ported verbatim; `rocq_diag` / `rocq_health` / `rocq_switch` deferred).
+The permanent references for this relationship are
+`specifications/engine-migration-report.md` and
+`specifications/mcp-layer-plan.md`.
 
 ### Upstream symbol → core module map
 
@@ -74,7 +85,20 @@ Use this table when porting upstream changes:
 | `interactive.py` import cache/state table/staleness | `core/sessions.py` |
 | `interactive.py` run_* + goal formatting | `core/interactive.py` |
 | `verify.py`, `proof_walk.py`, `compile_enrichment.py`, `diag.py`, `health.py` | same name in `core/` |
-| deleted: FastMCP app, 13 `@mcp.tool` wrappers, `main()` | — (rebuilt later as our own MCP layer) |
+| `server.py` FastMCP app + lifespan | `server/__init__.py` (lifespan delegates to `core.state`) |
+| `server.py` 10 proof `@mcp.tool` wrappers | `server/tools/{compile,query,interactive}.py` (verbatim) |
+| deferred: `rocq_diag` / `rocq_health` / `rocq_switch` wrappers | — (not ported; see plan §2) |
+
+MCP-layer conventions:
+
+- Wrappers are plain `async def` functions (no decorator); `server/__init__.py`
+  registers them via `mcp.add_tool`.  Context arrives as the legacy FastMCP
+  3.x type-hint injection (`ctx: Context = None`), so tests can call wrappers
+  directly with a duck-typed mock context.
+- Wrapper bodies reference the envelope/`run_*` helpers by their imported
+  names, so tests monkeypatch `server.tools.*` (wrapper-module bindings) and
+  `core.envelope` / `core.workspace` / `core.config` (helper internals).
+- `core/` stays engine-only: no fastmcp imports, no MCP symbols.
 
 Import conventions that must be preserved:
 
@@ -105,12 +129,14 @@ Import conventions that must be preserved:
 | Upstream version | Pinned commit | Ported | Skipped | Notes |
 |------------------|---------------|--------|---------|-------|
 | 0.3.1 | `6983113d...` | Engine layer (full) | FastMCP layer (all) | Initial migration; see specs |
+| 0.3.1 | `6983113d...` | MCP layer (10 proof tools) | `rocq_diag` / `rocq_health` / `rocq_switch` | Thin FastMCP 3.x layer; see `specifications/mcp-layer-plan.md` |
 
 ## Roadmap
 
-- Build our own MCP exposure layer on top of `core`.
-- Re-add the deferred wrapper tests (see
-  `specifications/engine-migration-report.md` §5 Phase 4).
+- Add `rocq_diag` / `rocq_health` / `rocq_switch` and their wrapper tests
+  (see `specifications/mcp-layer-plan.md` §2).
+- Keep the wrapper bodies in lockstep with upstream on future syncs (they
+  are verbatim ports; the symbol map above shows where each lives).
 
 ## License
 

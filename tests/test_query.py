@@ -20,7 +20,10 @@ from pathlib import Path
 import pytest
 
 from core.interactive import run_query
-from tests.conftest import PET_AVAILABLE, _MockPetBase
+from tests.conftest import PET_AVAILABLE, _MockContext, _MockPetBase
+
+import server.tools.query as _server
+from server.tools.query import rocq_query
 
 _pet_only = pytest.mark.skipif(not PET_AVAILABLE, reason="pet not available")
 
@@ -1075,3 +1078,195 @@ class TestLspSeverityWire:
         # The deprecation warning must be filtered out.
         assert "deprecat" not in without_warn["output"].lower()
         assert "from stdlib" not in without_warn["output"].lower()
+
+
+# ---------------------------------------------------------------------------
+# Restored MCP-wrapper tests (adapted from upstream; see specifications/mcp-layer-plan.md)
+# ---------------------------------------------------------------------------
+
+class TestRocqQueryWrapper:
+    """Tests for the rocq_query MCP wrapper in server.py."""
+
+    @pytest.mark.asyncio
+    async def test_ctx_none_returns_error(self):
+        from server.tools.query import rocq_query
+
+        result = await rocq_query(command="Check nat.", ctx=None)
+        assert result["success"] is False
+        assert "context" in result["error"].lower()
+
+    @pytest.mark.asyncio
+    async def test_invalid_workspace_returns_error(self):
+        from server.tools.query import rocq_query
+        from tests.conftest import _MockContext
+
+        mock_ctx = _MockContext({})
+        result = await rocq_query(
+            command="Check nat.",
+            workspace="/nonexistent_rocq_workspace_xyz",
+            ctx=mock_ctx,
+        )
+        assert result["success"] is False
+
+    @pytest.mark.asyncio
+    async def test_params_forwarded(self, monkeypatch, tmp_path):
+        """Wrapper should forward all params to run_query."""
+        from server.tools.query import rocq_query
+        from tests.conftest import _MockContext
+        import server.tools.query as _server
+
+        captured = {}
+
+        async def mock_run_query(**kwargs):
+            captured.update(kwargs)
+            return {"success": True, "output": "mock"}
+
+        monkeypatch.setattr(_server, "run_query", mock_run_query)
+        monkeypatch.setattr(core_envelope, "_validate_workspace", lambda ws: None)
+
+        mock_ctx = _MockContext({"pet_client": None})
+
+        await rocq_query(
+            command="Check nat.",
+            preamble="Require Import Arith.",
+            file="test.v",
+            workspace=str(tmp_path),
+            max_results=5,
+            ctx=mock_ctx,
+        )
+
+        assert captured["command"] == "Check nat."
+        assert captured["preamble"] == "Require Import Arith."
+        assert captured["file"] == "test.v"
+        assert captured["max_results"] == 5
+        assert captured["lifespan_state"] is mock_ctx.lifespan_context
+
+
+class TestRocqQueryTimeout:
+    """timeout on the rocq_query MCP wrapper."""
+
+    @staticmethod
+    def _patch(monkeypatch):
+        captured: dict = {}
+
+        async def mock_run_query(**kwargs):
+            captured.update(kwargs)
+            return {"success": True, "output": "mock"}
+
+        monkeypatch.setattr(_server, "run_query", mock_run_query)
+        monkeypatch.setattr(core_envelope, "_validate_workspace", lambda ws: None)
+        return captured
+
+    @pytest.mark.asyncio
+    async def test_default_falls_back_to_lifespan(self, monkeypatch, tmp_path):
+        captured = self._patch(monkeypatch)
+        result = await rocq_query(
+            command="Check nat.",
+            workspace=str(tmp_path),
+            ctx=_MockContext({"pet_client": None}),
+        )
+        assert result["success"] is True
+        assert captured["timeout"] is None
+        assert "clamped_timeout" not in result
+
+    @pytest.mark.asyncio
+    async def test_explicit_timeout_forwarded(self, monkeypatch, tmp_path):
+        captured = self._patch(monkeypatch)
+        result = await rocq_query(
+            command="Time Eval vm_compute in 1.",
+            workspace=str(tmp_path),
+            timeout=60,
+            ctx=_MockContext({"pet_client": None}),
+        )
+        assert result["success"] is True
+        assert captured["timeout"] == 60
+        assert "clamped_timeout" not in result
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("bad", [0, -5], ids=["zero", "negative"])
+    async def test_invalid_falls_back_to_lifespan(self, monkeypatch, tmp_path, bad):
+        captured = self._patch(monkeypatch)
+        result = await rocq_query(
+            command="Check nat.",
+            workspace=str(tmp_path),
+            timeout=bad,
+            ctx=_MockContext({"pet_client": None}),
+        )
+        assert result["success"] is True
+        assert captured["timeout"] is None
+        assert "clamped_timeout" not in result
+
+    @pytest.mark.asyncio
+    async def test_above_cap_clamped_with_signal(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(core_config, "ROCQ_QUERY_TIMEOUT_CAP", 100)
+        captured = self._patch(monkeypatch)
+        result = await rocq_query(
+            command="Check nat.",
+            workspace=str(tmp_path),
+            timeout=9999,
+            ctx=_MockContext({"pet_client": None}),
+        )
+        assert result["success"] is True
+        assert captured["timeout"] == 100
+        assert result["clamped_timeout"] == 100
+
+    @pytest.mark.asyncio
+    async def test_at_cap_not_clamped(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(core_config, "ROCQ_QUERY_TIMEOUT_CAP", 100)
+        captured = self._patch(monkeypatch)
+        result = await rocq_query(
+            command="Check nat.",
+            workspace=str(tmp_path),
+            timeout=100,
+            ctx=_MockContext({"pet_client": None}),
+        )
+        assert result["success"] is True
+        assert captured["timeout"] == 100
+        assert "clamped_timeout" not in result
+
+    def test_default_cap_is_300(self):
+        assert core_config.ROCQ_QUERY_TIMEOUT_CAP == 300
+
+
+class TestRocqQueryFromStateWrapper:
+    """The wrapper now just forwards from_state — no validation here."""
+
+    @pytest.mark.asyncio
+    async def test_from_state_forwarded_to_run_query(self, monkeypatch, tmp_path):
+        """Valid from_state should be forwarded to run_query."""
+        captured: dict = {}
+
+        async def mock_run_query(**kwargs):
+            captured.update(kwargs)
+            return {"success": True, "output": "mock"}
+
+        monkeypatch.setattr(_server, "run_query", mock_run_query)
+        monkeypatch.setattr(core_envelope, "_validate_workspace", lambda ws: None)
+
+        result = await rocq_query(
+            command="Search nat.",
+            from_state=7,
+            workspace=str(tmp_path),
+            ctx=_MockContext({"pet_client": None}),
+        )
+        assert result["success"] is True
+        assert captured["from_state"] == 7
+
+    @pytest.mark.asyncio
+    async def test_from_state_default_none(self, monkeypatch, tmp_path):
+        """When from_state is omitted, run_query receives None (back-compat)."""
+        captured: dict = {}
+
+        async def mock_run_query(**kwargs):
+            captured.update(kwargs)
+            return {"success": True, "output": "mock"}
+
+        monkeypatch.setattr(_server, "run_query", mock_run_query)
+        monkeypatch.setattr(core_envelope, "_validate_workspace", lambda ws: None)
+
+        await rocq_query(
+            command="Check nat.",
+            workspace=str(tmp_path),
+            ctx=_MockContext({"pet_client": None}),
+        )
+        assert captured["from_state"] is None
