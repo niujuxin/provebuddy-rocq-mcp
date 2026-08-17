@@ -133,4 +133,8 @@ has all imports and scopes set up.
 ## License
 
 Apache License, Version 2.0.  See [LICENSE](LICENSE) and [NOTICE](NOTICE).
+This repository is a derived work: the engine in `core/` and the tool
+wrappers in `server/` are reorganized/verbatim ports of
+[rocq-mcp](https://github.com/LLM4Rocq/rocq-mcp) (Copyright 2024 Inria,
+Apache-2.0); attribution details are in [NOTICE](NOTICE).
 For contributors, see [DEVELOPMENT.md](DEVELOPMENT.md).

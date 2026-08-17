@@ -141,6 +141,8 @@ Import conventions that must be preserved:
 ## License
 
 See [LICENSE](LICENSE) and [NOTICE](NOTICE).  The `third_party/rocq-mcp`
-submodule is the rocq-mcp project, Copyright LLM4Rocq contributors, licensed
-under the Apache License, Version 2.0.  `core/` is a derived work of that
-project under the same license.
+submodule is the rocq-mcp project, Copyright 2024 Inria (upstream LICENSE)
+and maintained by the LLM4Rocq contributors, licensed under the Apache
+License, Version 2.0.  `core/`, `server/tools/`, and the re-pointed tests
+are derived works of that project under the same license; see NOTICE for
+the attribution statement.

@@ -3,6 +3,7 @@ name = "provebuddy-rocq-mcp"
 version = "0.1.0"
 description = "Rocq/Coq proof engine with a thin FastMCP 3.x STDIO server"
 license = "Apache-2.0"
+readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "psutil>=5.9",

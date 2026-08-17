@@ -1,11 +1,29 @@
 provebuddy-rocq-mcp
 Copyright 2026 provebuddy contributors
 
+Licensed under the Apache License, Version 2.0 (the "License"); you may
+not use this product except in compliance with the License.  You may
+obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
 This product includes software derived from the rocq-mcp project
-(https://github.com/LLM4Rocq/rocq-mcp), Copyright LLM4Rocq contributors,
+(https://github.com/LLM4Rocq/rocq-mcp), Copyright 2024 Inria (as stated
+in the upstream LICENSE) and maintained by the LLM4Rocq contributors,
 licensed under the Apache License, Version 2.0.
 
-The `core/` package is a reorganized, self-contained copy of the rocq-mcp
-engine (pinned at commit 6983113d0844c0b7f987c79dab13988445109bfb,
-version 0.3.1), with the FastMCP layer removed.  The unmodified upstream
-source remains available as the `third_party/rocq-mcp` git submodule.
+Derived portions of this product:
+
+- `core/` -- a reorganized, self-contained copy of the rocq-mcp engine
+  (pinned commit 6983113d0844c0b7f987c79dab13988445109bfb, version
+  0.3.1) with the FastMCP layer removed.  Files were relocated and
+  reorganized; implementation logic is unchanged.
+- `server/tools/` -- verbatim ports of the upstream `@mcp.tool` wrappers
+  (same tool names, descriptions, parameters, and function bodies).
+- `tests/` -- upstream tests, with imports re-pointed to `core.*` and
+  `server.tools.*`.
+
+The unmodified upstream source is retained as the `third_party/rocq-mcp`
+git submodule for reference and future syncs.  In accordance with the
+Apache License, Section 4, modified files carry this notice; see
+DEVELOPMENT.md for the upstream symbol map and sync policy.
